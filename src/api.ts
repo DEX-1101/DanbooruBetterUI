@@ -9,7 +9,10 @@ export const searchTags = async (query: string): Promise<Tag[]> => {
   if (!query) return [];
   try {
     const res = await fetch(`${BASE_URL}/tags.json?search[name_matches]=*${query}*&search[order]=count&limit=10`);
-    if (!res.ok) throw new Error('Failed to fetch tags');
+    if (!res.ok) {
+      console.error(`Failed to fetch tags: ${res.status} ${res.statusText}`);
+      throw new Error(`Failed to fetch tags: ${res.status}`);
+    }
     return await res.json();
   } catch (error) {
     console.error('Error searching tags:', error);
@@ -23,7 +26,10 @@ export const searchTags = async (query: string): Promise<Tag[]> => {
 export const getTag = async (tagName: string): Promise<Tag | null> => {
   try {
     const res = await fetch(`${BASE_URL}/tags.json?search[name]=${tagName}`);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error(`Failed to fetch tag details: ${res.status} ${res.statusText}`);
+      return null;
+    }
     const data = await res.json();
     return data.length > 0 ? data[0] : null;
   } catch (error) {
@@ -38,7 +44,10 @@ export const getTag = async (tagName: string): Promise<Tag | null> => {
 export const getTagWiki = async (tagName: string): Promise<WikiPage | null> => {
   try {
     const res = await fetch(`${BASE_URL}/wiki_pages.json?search[title]=${tagName}`);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error(`Failed to fetch wiki: ${res.status} ${res.statusText}`);
+      return null;
+    }
     const data = await res.json();
     return data.length > 0 ? data[0] : null;
   } catch (error) {
@@ -50,7 +59,10 @@ export const getTagWiki = async (tagName: string): Promise<WikiPage | null> => {
 export const getPostById = async (id: string): Promise<Post | null> => {
   try {
     const res = await fetch(`${BASE_URL}/posts/${id}.json`);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error(`Failed to fetch post by ID: ${res.status} ${res.statusText}`);
+      return null;
+    }
     const post: Post = await res.json();
     
     const fixImageUrl = (url?: string) => {
@@ -79,7 +91,10 @@ export const getPostsByTag = async (tagName: string, safeMode: boolean = true, p
   try {
     const tags = safeMode ? `${tagName} rating:g` : tagName;
     const res = await fetch(`${BASE_URL}/posts.json?tags=${tags}&limit=50&page=${page}`);
-    if (!res.ok) throw new Error('Failed to fetch posts');
+    if (!res.ok) {
+      console.error(`Failed to fetch posts: ${res.status} ${res.statusText}`);
+      throw new Error(`Failed to fetch posts: ${res.status}`);
+    }
     const posts: Post[] = await res.json();
     
     // Danbooru's CDN (cdn.donmai.us) strictly blocks hotlinking.

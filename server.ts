@@ -15,39 +15,45 @@ async function startServer() {
 
     try {
       console.log(`Proxying image request for: ${imageUrl}`);
-      // Fetch the image from Danbooru using a browser-like User-Agent and headers
-      const imageResponse = await fetch(imageUrl, {
+      
+      const commonHeaders = {
+        'User-Agent': 'DanbooruTagExplorer/1.0 (goblin.gabonga.x1@gmail.com)',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+      };
+
+      // Try with Referer first
+      let imageResponse = await fetch(imageUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache',
+          ...commonHeaders,
           'Referer': 'https://danbooru.donmai.us/',
-          'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-          'Sec-Ch-Ua-Mobile': '?0',
-          'Sec-Ch-Ua-Platform': '"Windows"',
-          'Sec-Fetch-Dest': 'image',
-          'Sec-Fetch-Mode': 'no-cors',
-          'Sec-Fetch-Site': 'cross-site',
         },
       });
 
+      // If 403, try without Referer
+      if (imageResponse.status === 403) {
+        console.log('403 Forbidden with Referer, retrying without Referer...');
+        imageResponse = await fetch(imageUrl, {
+          headers: commonHeaders,
+        });
+      }
+
+      // If still 403, try with a generic browser User-Agent
+      if (imageResponse.status === 403) {
+        console.log('403 Forbidden with descriptive UA, retrying with generic browser UA...');
+        imageResponse = await fetch(imageUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Referer': 'https://danbooru.donmai.us/',
+          },
+        });
+      }
+
       if (!imageResponse.ok) {
-        console.error(`Failed to fetch image from Danbooru: ${imageResponse.status} ${imageResponse.statusText}`);
-        // If 403, try one more time without Referer as some CDNs are picky
-        if (imageResponse.status === 403) {
-          console.log('Retrying without Referer...');
-          const retryResponse = await fetch(imageUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-            }
-          });
-          if (retryResponse.ok) {
-            return handleResponse(retryResponse, res);
-          }
-        }
+        console.error(`Failed to fetch image from source: ${imageResponse.status} ${imageResponse.statusText} for ${imageUrl}`);
         return res.status(imageResponse.status).send(`Failed to fetch image from source: ${imageResponse.statusText}`);
       }
 

@@ -1087,6 +1087,7 @@ export default function App() {
                             src={post.preview_file_url || post.large_file_url || post.file_url}
                             alt={`Post ${post.id}`}
                             loading="lazy"
+                            referrerPolicy="no-referrer"
                             className="w-full h-auto object-cover transition-transform duration-500 group-hover:scale-105"
                           />
                         )}
@@ -1221,6 +1222,7 @@ export default function App() {
                   <img 
                     src={selectedImagePost.large_file_url || selectedImagePost.file_url || selectedImagePost.preview_file_url} 
                     alt={`Post ${selectedImagePost.id}`}
+                    referrerPolicy="no-referrer"
                     className="max-w-full max-h-[40vh] md:max-h-[85vh] object-contain"
                   />
                 )}
