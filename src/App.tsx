@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Image as ImageIcon, Info, Shield, ShieldAlert, Loader2, Tag as TagIcon, User, Copyright, Hash, X, Copy, Check, ExternalLink, ChevronLeft, ChevronRight, Play, Pause, Volume2, VolumeX } from 'lucide-react';
+import { Search, Image as ImageIcon, Info, Shield, ShieldAlert, Loader2, Tag as TagIcon, User, Copyright, Hash, X, Copy, Check, ExternalLink, ChevronLeft, ChevronRight, Play, Pause, Volume2, VolumeX, Download } from 'lucide-react';
 import { useDebounce } from 'use-debounce';
 import { searchTags, getTagWiki, getPostsByTag, getTag, getPostById } from './api';
 import { Tag, Post, WikiPage } from './types';
@@ -475,9 +475,13 @@ const RunningLines = () => {
 };
 
 export default function App() {
-  const [query, setQuery] = useState('');
-  const [debouncedQuery] = useDebounce(query, 500);
+  const [queryTags, setQueryTags] = useState<string[]>([]);
+  const [inputValue, setInputValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const [debouncedWord] = useDebounce(inputValue, 300);
   const [suggestions, setSuggestions] = useState<Tag[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
   const [isSearching, setIsSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   
@@ -497,11 +501,74 @@ export default function App() {
   });
   const [copiedAll, setCopiedAll] = useState(false);
   const [copiedTag, setCopiedTag] = useState<string | null>(null);
+  const [downloadingIds, setDownloadingIds] = useState<Set<number>>(new Set());
   
   const [safeMode, setSafeMode] = useState(() => {
     const saved = localStorage.getItem('safeMode');
     return saved !== null ? JSON.parse(saved) : true;
   });
+
+  const handleDownload = async (post: Post) => {
+    if (!post || downloadingIds.has(post.id)) return;
+    setDownloadingIds(prev => new Set(prev).add(post.id));
+    try {
+      // Fetch the full post details from the API to ensure we get the original file_url
+      // Sometimes the list API omits the original file_url for large images
+      let url = post.file_url;
+      
+      try {
+        const fullPost = await getPostById(post.id.toString());
+        if (fullPost && fullPost.file_url) {
+          url = fullPost.file_url;
+        }
+      } catch (err) {
+        console.warn("Failed to fetch full post details, falling back to cached URLs", err);
+      }
+
+      // Fallback to large_file_url if original is completely unavailable
+      if (!url) {
+        url = post.large_file_url;
+      }
+      
+      if (!url) throw new Error("No URL available");
+      
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Network response was not ok");
+      
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = blobUrl;
+      
+      let filename = `danbooru_${post.id}.${post.file_ext}`;
+      if (url.includes('url=')) {
+        const decoded = decodeURIComponent(url.split('url=')[1]);
+        const extracted = decoded.split('/').pop()?.split('?')[0];
+        if (extracted) filename = extracted;
+      } else {
+        const extracted = url.split('/').pop()?.split('?')[0];
+        if (extracted) filename = extracted;
+      }
+      
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      
+      window.URL.revokeObjectURL(blobUrl);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error("Download failed:", error);
+      alert("Failed to download image.");
+    } finally {
+      setDownloadingIds(prev => {
+        const next = new Set(prev);
+        next.delete(post.id);
+        return next;
+      });
+    }
+  };
 
   const updateNavButtons = (forcedIndex?: number) => {
     const currentIndex = typeof forcedIndex === 'number' ? forcedIndex : (window.history.state?.index || 0);
@@ -520,6 +587,7 @@ export default function App() {
   const maxPages = selectedTag ? Math.ceil(selectedTag.post_count / 50) : 0;
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
   const skipNextDropdownRef = useRef(false);
   
   const isRestoringHistoryRef = useRef(false);
@@ -528,6 +596,19 @@ export default function App() {
   const selectedTagRef = useRef<Tag | null>(null);
   const currentPageRef = useRef<number>(1);
   
+  useEffect(() => {
+    setSelectedIndex(-1);
+  }, [suggestions, showDropdown]);
+
+  useEffect(() => {
+    if (selectedIndex >= 0 && suggestionsRef.current) {
+      const selectedElement = suggestionsRef.current.children[selectedIndex] as HTMLElement;
+      if (selectedElement) {
+        selectedElement.scrollIntoView({ block: 'nearest' });
+      }
+    }
+  }, [selectedIndex]);
+
   useEffect(() => {
     selectedTagRef.current = selectedTag;
   }, [selectedTag]);
@@ -558,7 +639,16 @@ export default function App() {
         
         setSelectedTag(newTag);
         setCurrentPage(e.state.page);
-        setQuery(e.state.query);
+        
+        if (e.state.query) {
+          setQueryTags(e.state.query.split(/\s+/).filter(Boolean));
+        } else if (newTag) {
+          setQueryTags([newTag.name]);
+        } else {
+          setQueryTags([]);
+        }
+        setInputValue('');
+        
         setIsWikiExpanded(false);
         
         if (newTag) {
@@ -576,8 +666,8 @@ export default function App() {
           }
           
           promises.push(
-            getPostsByTag(newTag.name, safeMode, e.state.page).then(postsData => {
-              setHasMore(postsData.length === 50);
+            getPostsByTag(newTag.name, safeMode, e.state.page).then(({ posts: postsData, hasMore }) => {
+              setHasMore(hasMore);
               setPosts(postsData.filter(p => p.file_url || p.preview_file_url));
             })
           );
@@ -672,12 +762,12 @@ export default function App() {
 
   useEffect(() => {
     const fetchSuggestions = async () => {
-      if (!debouncedQuery.trim()) {
+      if (!debouncedWord.trim()) {
         setSuggestions([]);
         return;
       }
       setIsSearching(true);
-      const results = await searchTags(debouncedQuery);
+      const results = await searchTags(debouncedWord);
       setSuggestions(results);
       setIsSearching(false);
       
@@ -688,7 +778,7 @@ export default function App() {
       }
     };
     fetchSuggestions();
-  }, [debouncedQuery]);
+  }, [debouncedWord]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -712,9 +802,82 @@ export default function App() {
     });
   };
 
+  const handleSearchSubmit = async () => {
+    const finalTags = [...queryTags];
+    if (inputValue.trim()) {
+      finalTags.push(inputValue.trim());
+      setQueryTags(finalTags);
+      setInputValue('');
+    }
+    
+    const formattedQuery = finalTags.join(' ').toLowerCase();
+    
+    if (!formattedQuery) return;
+    
+    // If it's a single tag, we can use handleTagClick
+    if (finalTags.length === 1) {
+      handleTagClick(finalTags[0]);
+      return;
+    }
+    
+    // If it's multiple tags, we just search for posts
+    skipNextDropdownRef.current = true;
+    setShowDropdown(false);
+    
+    // Create a dummy tag for selectedTag
+    const dummyTag: Tag = {
+      id: 0,
+      name: formattedQuery,
+      category: 0,
+      post_count: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    
+    setSelectedTag(dummyTag);
+    setCurrentPage(1);
+    setIsWikiExpanded(false);
+    setIsLoadingDetails(true);
+    setWiki(null); // No wiki for multiple tags
+    
+    if (!isRestoringHistoryRef.current) {
+      const currentIndex = window.history.state?.index || 0;
+      const newIndex = currentIndex + 1;
+      window.history.pushState({ index: newIndex, tag: dummyTag, page: 1, query: formattedQuery }, '');
+      sessionStorage.setItem('maxHistoryIndex', newIndex.toString());
+      updateNavButtons(newIndex);
+    }
+    
+    try {
+      const { posts: postsData, hasMore } = await getPostsByTag(formattedQuery, safeMode, 1);
+      setHasMore(hasMore);
+      setPosts(postsData.filter(p => p.file_url || p.preview_file_url));
+    } catch (error) {
+      console.error("Failed to fetch posts for multi-tag search", error);
+    } finally {
+      setIsLoadingDetails(false);
+    }
+  };
+
+  const handleSuggestionClick = (tag: Tag) => {
+    skipNextDropdownRef.current = true;
+    
+    setQueryTags([...queryTags, tag.name]);
+    setInputValue('');
+    
+    setShowDropdown(false);
+    
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+      }
+    }, 0);
+  };
+
   const handleSelectTag = async (tag: Tag) => {
     skipNextDropdownRef.current = true;
-    setQuery(tag.name);
+    setQueryTags([tag.name]);
+    setInputValue('');
     setShowDropdown(false);
     setSelectedTag(tag);
     setCurrentPage(1);
@@ -730,13 +893,13 @@ export default function App() {
     }
     
     try {
-      const [wikiData, postsData, tagDetails] = await Promise.all([
+      const [wikiData, { posts: postsData, hasMore }, tagDetails] = await Promise.all([
         getTagWiki(tag.name),
         getPostsByTag(tag.name, safeMode, 1),
         getTag(tag.name)
       ]);
       setWiki(wikiData);
-      setHasMore(postsData.length === 50);
+      setHasMore(hasMore);
       setPosts(postsData.filter(p => p.file_url || p.preview_file_url)); // Filter out posts without images
       if (tagDetails) {
         setSelectedTag(tagDetails);
@@ -757,9 +920,10 @@ export default function App() {
     if (newPage === currentPage) return;
     setCurrentPage(newPage);
     if (!isRestoringHistoryRef.current) {
+      const currentQuery = queryTags.join(' ') + (inputValue.trim() ? ' ' + inputValue.trim() : '');
       const currentIndex = window.history.state?.index || 0;
       const newIndex = currentIndex + 1;
-      window.history.pushState({ index: newIndex, tag: selectedTag, page: newPage, query }, '');
+      window.history.pushState({ index: newIndex, tag: selectedTag, page: newPage, query: currentQuery || selectedTag?.name || '' }, '');
       sessionStorage.setItem('maxHistoryIndex', newIndex.toString());
       updateNavButtons(newIndex);
     }
@@ -782,8 +946,8 @@ export default function App() {
   useEffect(() => {
     if (selectedTag && !isRestoringHistoryRef.current) {
       setIsLoadingDetails(true);
-      getPostsByTag(selectedTag.name, safeMode, currentPage).then(postsData => {
-        setHasMore(postsData.length === 50);
+      getPostsByTag(selectedTag.name, safeMode, currentPage).then(({ posts: postsData, hasMore }) => {
+        setHasMore(hasMore);
         setPosts(postsData.filter(p => p.file_url || p.preview_file_url));
         setIsLoadingDetails(false);
       });
@@ -829,31 +993,159 @@ export default function App() {
         {/* Search Bar */}
         <motion.div layout className="relative w-full" ref={dropdownRef}>
           <form 
-            className="relative shadow-2xl rounded-2xl group flex"
+            className="relative shadow-2xl rounded-2xl group flex flex-col"
             onSubmit={(e) => {
               e.preventDefault();
-              if (query.trim()) {
-                handleTagClick(query.trim());
-              }
+              handleSearchSubmit();
             }}
           >
             <RunningLines />
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setShowDropdown(true);
-                skipNextDropdownRef.current = false;
-              }}
-              onFocus={() => {
-                if (query.trim() && suggestions.length > 0) {
+            <div 
+              className="w-full bg-slate-900/80 backdrop-blur-xl rounded-2xl py-2 pl-4 pr-[120px] sm:pr-[160px] focus-within:bg-slate-900/95 transition-all border border-slate-700/50 flex flex-wrap items-center gap-2 min-h-[52px] cursor-text relative z-10 shadow-inner"
+              onClick={() => inputRef.current?.focus()}
+            >
+              {queryTags.map((tag, index) => (
+                <span key={index} className="bg-indigo-500/20 text-indigo-300 px-2.5 py-1 rounded-md inline-flex items-center gap-1.5 text-sm font-medium border border-indigo-500/30">
+                  {tag}
+                  <button 
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newTags = queryTags.filter((_, i) => i !== index);
+                      setQueryTags(newTags);
+                      
+                      // Trigger search immediately with the new tags
+                      if (newTags.length > 0 || inputValue.trim()) {
+                        // We need to pass the new tags directly since state update is async
+                        const finalTags = [...newTags];
+                        if (inputValue.trim()) {
+                          finalTags.push(inputValue.trim());
+                        }
+                        
+                        if (finalTags.length === 1) {
+                          handleTagClick(finalTags[0]);
+                        } else {
+                          const formattedQuery = finalTags.join(' ').toLowerCase();
+                          
+                          // Create a dummy tag for selectedTag
+                          const dummyTag = {
+                            id: 0,
+                            name: formattedQuery,
+                            category: 0,
+                            post_count: 0,
+                            created_at: new Date().toISOString(),
+                            updated_at: new Date().toISOString()
+                          };
+                          
+                          setSelectedTag(dummyTag);
+                          setCurrentPage(1);
+                          setIsWikiExpanded(false);
+                          setIsLoadingDetails(true);
+                          setWiki(null);
+                          setShowDropdown(false);
+                          
+                          if (!isRestoringHistoryRef.current) {
+                            const currentIndex = window.history.state?.index || 0;
+                            const newIndex = currentIndex + 1;
+                            window.history.pushState({ index: newIndex, tag: dummyTag, page: 1, query: formattedQuery }, '');
+                            sessionStorage.setItem('maxHistoryIndex', newIndex.toString());
+                            updateNavButtons(newIndex);
+                          }
+                          
+                          getPostsByTag(formattedQuery, safeMode, 1).then(({ posts: postsData, hasMore }) => {
+                            setHasMore(hasMore);
+                            setPosts(postsData.filter(p => p.file_url || p.preview_file_url));
+                          }).catch(error => {
+                            console.error("Failed to fetch posts for multi-tag search", error);
+                          }).finally(() => {
+                            setIsLoadingDetails(false);
+                          });
+                        }
+                      } else {
+                        // If no tags left, clear everything
+                        setSelectedTag(null);
+                        setPosts([]);
+                        setWiki(null);
+                        setShowDropdown(false);
+                        
+                        if (!isRestoringHistoryRef.current) {
+                          const currentIndex = window.history.state?.index || 0;
+                          const newIndex = currentIndex + 1;
+                          window.history.pushState({ index: newIndex, tag: null, page: 1, query: '' }, '');
+                          sessionStorage.setItem('maxHistoryIndex', newIndex.toString());
+                          updateNavButtons(newIndex);
+                        }
+                      }
+                      
+                      inputRef.current?.focus();
+                    }}
+                    className="hover:text-white hover:bg-indigo-500/50 rounded-full p-0.5 transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+              
+              <input
+                ref={inputRef}
+                type="text"
+                value={inputValue}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val.includes(' ')) {
+                    const parts = val.split(/\s+/);
+                    const newInputValue = parts.pop() || '';
+                    const newTags = parts.filter(Boolean);
+                    if (newTags.length > 0) {
+                      setQueryTags([...queryTags, ...newTags]);
+                    }
+                    setInputValue(newInputValue);
+                  } else {
+                    setInputValue(val);
+                  }
                   setShowDropdown(true);
-                }
-              }}
-              placeholder="Search tags (e.g., hatsune_miku)..."
-              className="w-full pl-6 pr-[120px] sm:pr-[160px] py-3 bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 text-white placeholder-slate-500 focus:bg-slate-900/95 rounded-2xl transition-all outline-none text-lg shadow-inner relative z-10"
-            />
+                  skipNextDropdownRef.current = false;
+                }}
+                onKeyDown={(e) => {
+                  if (showDropdown && suggestions.length > 0) {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setSelectedIndex((prev) => (prev < suggestions.length - 1 ? prev + 1 : prev));
+                      return;
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setSelectedIndex((prev) => (prev > 0 ? prev - 1 : -1));
+                      return;
+                    } else if (e.key === 'Enter') {
+                      if (selectedIndex >= 0) {
+                        e.preventDefault();
+                        handleSuggestionClick(suggestions[selectedIndex]);
+                        return;
+                      }
+                    } else if (e.key === 'Escape') {
+                      setShowDropdown(false);
+                      return;
+                    }
+                  }
+                  
+                  if (e.key === 'Backspace' && !inputValue && queryTags.length > 0) {
+                    e.preventDefault();
+                    const newTags = [...queryTags];
+                    const removed = newTags.pop();
+                    setQueryTags(newTags);
+                    setInputValue(removed || '');
+                  }
+                }}
+                onFocus={() => {
+                  if (inputValue.trim() && suggestions.length > 0) {
+                    setShowDropdown(true);
+                  }
+                }}
+                placeholder={queryTags.length === 0 ? "Search tags (e.g., hatsune_miku)..." : ""}
+                className="flex-1 min-w-[60px] w-0 bg-transparent text-white placeholder-slate-500 focus:outline-none text-lg py-1"
+              />
+            </div>
+            
             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2 z-20">
               {isSearching && (
                 <Loader2 className="w-5 h-5 text-indigo-400 animate-spin" />
@@ -885,25 +1177,32 @@ export default function App() {
           <AnimatePresence>
             {showDropdown && suggestions.length > 0 && (
               <motion.div
+                ref={suggestionsRef}
                 initial={{ opacity: 0, y: -10, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -10, scale: 0.98 }}
                 transition={{ duration: 0.2 }}
                 className="absolute top-full left-0 right-0 mt-3 bg-slate-900/95 backdrop-blur-2xl rounded-2xl shadow-2xl border border-slate-700/50 overflow-hidden z-50 max-h-[40vh] sm:max-h-[50vh] overflow-y-auto custom-scrollbar"
               >
-                {suggestions.map((tag) => {
+                {suggestions.map((tag, index) => {
                   const color = CATEGORY_COLORS[tag.category] || CATEGORY_COLORS[0];
+                  const isSelected = index === selectedIndex;
                   return (
                     <button
                       key={tag.id}
-                      onClick={() => handleSelectTag(tag)}
-                      className="w-full text-left px-5 py-4 hover:bg-slate-800/80 border-b border-slate-800/50 last:border-0 flex items-center justify-between group transition-colors"
+                      onClick={() => handleSuggestionClick(tag)}
+                      onMouseEnter={() => setSelectedIndex(index)}
+                      className={`w-full text-left px-5 py-4 border-b border-slate-800/50 last:border-0 flex items-center justify-between group transition-colors ${
+                        isSelected ? 'bg-slate-800/80' : 'hover:bg-slate-800/80'
+                      }`}
                     >
                       <div className="flex items-center gap-4">
                         <span className={`p-2 rounded-xl ${color.bg} ${color.text} shadow-sm`}>
                           {color.icon}
                         </span>
-                        <span className="font-medium text-lg text-slate-200 group-hover:text-white transition-colors">
+                        <span className={`font-medium text-lg transition-colors ${
+                          isSelected ? 'text-white' : 'text-slate-200 group-hover:text-white'
+                        }`}>
                           {tag.name.replace(/_/g, ' ')}
                         </span>
                       </div>
@@ -1052,26 +1351,46 @@ export default function App() {
                       key={post.id}
                       className="break-inside-avoid relative group rounded-xl overflow-hidden bg-slate-800 border border-slate-700"
                     >
-                      <button 
+                      <div 
                         onClick={() => setSelectedImagePost(post)}
-                        className="block w-full h-full text-left"
+                        className="block w-full h-full text-left cursor-pointer"
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setSelectedImagePost(post);
+                          }
+                        }}
                       >
-                        {/* External Link to Danbooru */}
-                        <a 
-                          href={`https://danbooru.donmai.us/posts/${post.id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        {/* Download Original Button */}
+                        <button 
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            window.open(`https://danbooru.donmai.us/posts/${post.id}`, '_blank');
-                            window.focus();
+                            handleDownload(post);
                           }}
-                          className="absolute top-2 left-2 z-20 p-2 bg-black/60 backdrop-blur-md text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-300 hover:bg-indigo-600 border border-white/10 shadow-lg"
-                          title="View on Danbooru"
+                          disabled={downloadingIds.has(post.id)}
+                          className="absolute top-2 left-2 z-20 p-2 bg-black/60 backdrop-blur-md text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-300 hover:bg-indigo-600 border border-white/10 shadow-lg disabled:opacity-100 disabled:bg-indigo-600"
+                          title="Download Original"
                         >
-                          <ExternalLink className="w-4 h-4" />
-                        </a>
+                          {downloadingIds.has(post.id) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                        </button>
+
+                        {/* Downloading Overlay */}
+                        <AnimatePresence>
+                          {downloadingIds.has(post.id) && (
+                            <motion.div
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              exit={{ opacity: 0 }}
+                              className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm"
+                            >
+                              <Loader2 className="w-8 h-8 text-indigo-400 animate-spin mb-2" />
+                              <span className="text-white font-medium text-sm">Downloading...</span>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
 
                         {isVideo(post.file_ext) && !post.preview_file_url ? (
                           <video
@@ -1106,7 +1425,7 @@ export default function App() {
                             </span>
                           </div>
                         </div>
-                      </button>
+                      </div>
                     </motion.div>
                   ))}
                 </div>
@@ -1122,8 +1441,8 @@ export default function App() {
                 </div>
               )}
 
-              {/* Pagination Controls - Show if we have a tag and (we have posts OR we are past page 1) */}
-              {(posts.length > 0 || currentPage > 1) && (
+              {/* Pagination Controls - Show if we have a tag and (we have posts OR we are past page 1 OR there are more pages) */}
+              {(posts.length > 0 || currentPage > 1 || hasMore) && (
                 <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center justify-center gap-3 bg-slate-900/90 backdrop-blur-xl p-2 rounded-2xl border border-slate-700/50 shadow-2xl">
                   <button
                     onClick={() => handlePageChange(Math.max(1, currentPage - 1))}
@@ -1308,7 +1627,15 @@ export default function App() {
                   </div>
                 </div>
                 
-                <div className="mt-4 pt-4 border-t border-slate-800 shrink-0">
+                <div className="mt-4 pt-4 border-t border-slate-800 shrink-0 flex flex-col gap-2">
+                  <button
+                    onClick={() => handleDownload(selectedImagePost)}
+                    disabled={downloadingIds.has(selectedImagePost.id)}
+                    className="flex items-center justify-center gap-2 w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-medium transition-colors"
+                  >
+                    {downloadingIds.has(selectedImagePost.id) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                    {downloadingIds.has(selectedImagePost.id) ? 'Downloading...' : 'Download Original'}
+                  </button>
                   <a 
                     href={`https://danbooru.donmai.us/posts/${selectedImagePost.id}`}
                     target="_blank"
