@@ -4,6 +4,8 @@ import { useDebounce } from 'use-debounce';
 import { searchTags, getTagWiki, getPostsByTag, getTag, getPostById } from './api';
 import { Tag, Post, WikiPage } from './types';
 import { motion, AnimatePresence } from 'motion/react';
+import ChatMenu from './components/ChatMenu';
+import ZoomableImage from './components/ZoomableImage';
 
 const isVideo = (ext?: string) => {
   if (!ext) return false;
@@ -271,7 +273,7 @@ const CustomVideoPlayer = ({ src, className, onPlayPause }: { src: string, class
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [showControls, setShowControls] = useState(true);
-  const controlsTimeoutRef = useRef<NodeJS.Timeout>();
+  const controlsTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   const togglePlay = () => {
     if (videoRef.current) {
@@ -1268,6 +1270,21 @@ export default function App() {
                     <h2 className="text-2xl font-bold text-white mb-2 capitalize break-words">
                       {selectedTag.name.replace(/_/g, ' ')}
                     </h2>
+                    {wiki?.other_names && wiki.other_names.some(name => /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\uFAFF\uFF66-\uFF9F\uAC00-\uD7AF]/.test(name)) && (
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {wiki.other_names.filter(name => /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\uFAFF\uFF66-\uFF9F\uAC00-\uD7AF]/.test(name)).map((name, idx) => (
+                          <div key={idx} className="flex items-center gap-1 bg-slate-800/50 px-2 py-1 rounded text-sm text-slate-300 border border-slate-700/50">
+                            <a href={`https://www.pixiv.net/tags/${encodeURIComponent(name.replace(/_/g, ' '))}/artworks`} target="_blank" rel="noopener noreferrer" className="hover:text-indigo-400 hover:underline inline-flex items-center gap-1" title="Search on Pixiv">
+                              {name.replace(/_/g, ' ')}
+                              <ExternalLink className="w-3 h-3 inline" />
+                            </a>
+                            <button onClick={() => handleCopySingleTag(name)} className="text-slate-500 hover:text-slate-300 ml-1" title="Copy">
+                              {copiedTag === name ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2">
                       <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium ${CATEGORY_COLORS[selectedTag.category]?.bg || CATEGORY_COLORS[0].bg} ${CATEGORY_COLORS[selectedTag.category]?.text || CATEGORY_COLORS[0].text}`}>
                         {CATEGORY_COLORS[selectedTag.category]?.icon || CATEGORY_COLORS[0].icon}
@@ -1538,11 +1555,10 @@ export default function App() {
                     className="max-w-full max-h-[40vh] md:max-h-[85vh] object-contain cursor-pointer"
                   />
                 ) : (
-                  <img 
-                    src={selectedImagePost.large_file_url || selectedImagePost.file_url || selectedImagePost.preview_file_url} 
+                  <ZoomableImage
+                    src={selectedImagePost.large_file_url || selectedImagePost.file_url || selectedImagePost.preview_file_url || ''} 
                     alt={`Post ${selectedImagePost.id}`}
-                    referrerPolicy="no-referrer"
-                    className="max-w-full max-h-[40vh] md:max-h-[85vh] object-contain"
+                    className="w-full h-[40vh] md:h-[85vh]"
                   />
                 )}
                 {posts.findIndex(p => p.id === selectedImagePost.id) < posts.length - 1 && (
@@ -1651,6 +1667,8 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+      
+      <ChatMenu />
     </div>
   );
 }

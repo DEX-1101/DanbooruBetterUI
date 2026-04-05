@@ -33,6 +33,7 @@ export interface WikiPage {
   body: string;
   created_at: string;
   updated_at: string;
+  other_names?: string[];
 }
 
 export interface TagGroup {
